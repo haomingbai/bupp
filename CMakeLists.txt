@@ -1,6 +1,6 @@
 cmake_minimum_required(VERSION 3.20)
 
-set(BNIO_VERSION "0.1.1" CACHE STRING "bnio package version")
+set(BNIO_VERSION "0.2.0" CACHE STRING "bnio package version")
 
 project(
   bnio
