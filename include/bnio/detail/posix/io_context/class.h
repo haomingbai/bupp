@@ -52,9 +52,22 @@ class resolve_operation;
 /**
  * High-level asynchronous I/O context for the configured native backend.
  *
+ * io_context is the event-loop owner and scheduler factory:
+ *
+ * 1. Event loop host — run() drives the selected io_uring or kqueue loop;
+ *    each thread calling run() creates its own native context.
+ * 2. Scheduler factory — produces dispatch and post schedulers.
+ * 3. Passive I/O backend — publishes scheduler I/O to the running worker's
+ *    own queue or, for every other producer, to the shared queue that a
+ *    worker drains on its owning native-context thread.
+ *
  * io_context adapts the non-owning async_io views into sender-returning
  * operations. Higher-level stream owners build on top of these view-level
  * operations instead of being known by io_context.
+ *
+ * The context is non-movable: it owns native workers, the timer heap, and
+ * its synchronization resources, and it must outlive every operation
+ * submitted on it.
  */
 class BNIO_EXPORT io_context {
  public:
@@ -272,15 +285,34 @@ class BNIO_EXPORT io_context {
                                         const_buffer buffer,
                                         int flags = 0) const;
 
+    /**
+     * Creates a sender that performs one datagram receive on a connected
+     * socket.
+     */
     [[nodiscard]] auto async_receive(async_io::datagram_socket_view socket,
                                      mutable_buffer buffer,
                                      int flags = 0) const;
+
+    /**
+     * Creates a sender that performs one datagram send on a connected
+     * socket.
+     */
     [[nodiscard]] auto async_send(async_io::datagram_socket_view socket,
                                   const_buffer buffer, int flags = 0) const;
+
+    /**
+     * Creates a sender that performs one datagram receive and stores the
+     * source endpoint into @p endpoint.
+     */
     [[nodiscard]] auto async_receive_from(async_io::datagram_socket_view socket,
                                           mutable_buffer buffer,
                                           ip::endpoint& endpoint,
                                           int flags = 0) const;
+
+    /**
+     * Creates a sender that performs one datagram send to @p endpoint,
+     * without requiring a connected socket.
+     */
     [[nodiscard]] auto async_send_to(async_io::datagram_socket_view socket,
                                      const_buffer buffer,
                                      const ip::endpoint& endpoint,
@@ -397,14 +429,20 @@ class BNIO_EXPORT io_context {
    */
   class join_sender {
    public:
+    /** Completes with set_value() when the context has fully stopped. */
     using completion_signatures =
         bexec::completion_signatures<bexec::set_value_t()>;
 
+    /** Creates a join sender bound to @p context. */
     explicit join_sender(io_context& context) noexcept : context_(&context) {}
 
+    /**
+     * Operation state that stops the context and waits for it to finish.
+     */
     template <class Receiver>
     class operation {
      public:
+      /** Creates an operation bound to the context and receiver. */
       operation(io_context& context, Receiver receiver)
           : context_(&context), receiver_(std::move(receiver)) {}
 
@@ -413,6 +451,10 @@ class BNIO_EXPORT io_context {
       operation(operation&&) = delete;
       operation& operator=(operation&&) = delete;
 
+      /**
+       * Stops the context on the elected thread, or waits for the already
+       * stopping thread, then completes the receiver with set_value().
+       */
       void start() noexcept {
         if (context_->begin_stop()) {
           // This thread is responsible for stopping.
@@ -434,6 +476,10 @@ class BNIO_EXPORT io_context {
       Receiver receiver_;
     };
 
+    /**
+     * Connects the join sender to @p receiver and returns the operation
+     * state.
+     */
     template <class Receiver>
     [[nodiscard]] auto connect(Receiver receiver) const {
       return operation<std::remove_cvref_t<Receiver>>(*context_,
@@ -500,18 +546,29 @@ class BNIO_EXPORT io_context {
   [[nodiscard]] bool is_open() const noexcept;
 
   /**
-   * Runs the context event loop.
+   * Runs the context event loop on the calling thread until the context
+   * stops. Each call to run() creates one native context for this thread.
    *
-   * @return A default-constructed (success) error_code when the event
-   *         loop entered and ran normally, or an error_code carrying a
-   *         negative errno (e.g. ENOMEM) when the native I/O backend
-   *         could not be initialised.  The caller may wait and retry
-   *         run().
+   * @return An empty error_code for a normal run, operation_canceled when
+   *         the context stopped (including a stop requested before or
+   *         during this call), or the backend's error as
+   *         std::error_code(-errno, std::generic_category()) when the
+   *         native run loop could not be entered (for example the ring
+   *         could not be enabled or a wake poll could not be armed).
+   *         Whatever was already published when the enter failed is still
+   *         delivered to its receivers before run() returns.
    */
   std::error_code run() noexcept;
 
   /**
    * Requests the context event loop to stop.
+   *
+   * Work published before the stopping state was elected still completes.
+   * Inflight I/O and not-yet-executed queued work is aborted and reports
+   * set_value(operation_canceled), and so does every pending timer wait;
+   * a cancelled receiver stop token wins and reports set_stopped()
+   * instead. The elected stopping thread drains the shared queues, so no
+   * published work is silently dropped.
    */
   int stop() noexcept;
 
@@ -589,6 +646,10 @@ class BNIO_EXPORT io_context {
   [[nodiscard]] auto async_read(async_io::stream_socket_view socket,
                                 mutable_buffer buffer, int flags = 0);
 
+  /**
+   * Creates a sender for one socket read operation through a non-owning
+   * stream socket view.
+   */
   [[nodiscard]] auto async_read_some(async_io::stream_socket_view socket,
                                      mutable_buffer buffer, int flags = 0);
 
@@ -613,6 +674,9 @@ class BNIO_EXPORT io_context {
   [[nodiscard]] auto async_read(async_io::descriptor_view descriptor,
                                 mutable_buffer buffer);
 
+  /**
+   * Creates a sender for one streaming descriptor read operation.
+   */
   [[nodiscard]] auto async_read_some(async_io::descriptor_view descriptor,
                                      mutable_buffer buffer);
 
@@ -636,6 +700,10 @@ class BNIO_EXPORT io_context {
   [[nodiscard]] auto async_read(async_io::random_access_file file,
                                 mutable_buffer buffer, std::uint64_t offset);
 
+  /**
+   * Creates a sender for one random access read operation at an explicit
+   * offset.
+   */
   [[nodiscard]] auto async_read_some(async_io::random_access_file file,
                                      mutable_buffer buffer,
                                      std::uint64_t offset);
@@ -655,13 +723,32 @@ class BNIO_EXPORT io_context {
                                       const_buffer buffer,
                                       std::uint64_t offset);
 
+  /**
+   * Creates a sender that performs one datagram receive on a connected
+   * socket.
+   */
   [[nodiscard]] auto async_receive(async_io::datagram_socket_view socket,
                                    mutable_buffer buffer, int flags = 0);
+
+  /**
+   * Creates a sender that performs one datagram send on a connected
+   * socket.
+   */
   [[nodiscard]] auto async_send(async_io::datagram_socket_view socket,
                                 const_buffer buffer, int flags = 0);
+
+  /**
+   * Creates a sender that performs one datagram receive and stores the
+   * source endpoint into @p endpoint.
+   */
   [[nodiscard]] auto async_receive_from(async_io::datagram_socket_view socket,
                                         mutable_buffer buffer,
                                         ip::endpoint& endpoint, int flags = 0);
+
+  /**
+   * Creates a sender that performs one datagram send to @p endpoint,
+   * without requiring a connected socket.
+   */
   [[nodiscard]] auto async_send_to(async_io::datagram_socket_view socket,
                                    const_buffer buffer,
                                    const ip::endpoint& endpoint, int flags = 0);
@@ -803,18 +890,52 @@ class BNIO_EXPORT io_context {
    */
   std::error_code run_native_loop() noexcept;
 
+  /**
+   * Registers a timer slot with this context, inserting it into the active
+   * time heap or the inactive list according to its expiry.
+   */
   void register_timer(detail::timer_slot& timer) noexcept;
 
+  /**
+   * Unregisters a timer slot, removing it from its heap/list container.
+   * Pending waits are detached and staged on the timer-ready list with
+   * canceled completion, delivering set_value(operation_canceled).
+   */
   void unregister_timer(detail::timer_slot& timer) noexcept;
 
+  /**
+   * Detaches the timer's submitted head-linked queue and marks every
+   * detached wait canceled. The timer's active/inactive state and expiry
+   * are left unchanged.
+   *
+   * @return The number of canceled waits.
+   */
   [[nodiscard]] std::size_t cancel_timer(detail::timer_slot& timer) noexcept;
 
+  /**
+   * Replaces the timer's expiry: removes the slot from its current
+   * container, stores the new expiry, detaches the submitted waits as
+   * canceled, and reinserts the slot into the active heap or the inactive
+   * list according to the new time.
+   *
+   * @return The number of detached waits.
+   */
   [[nodiscard]] std::size_t set_timer_expiry(detail::timer_slot& timer,
                                              time_point expiry) noexcept;
 
+  /**
+   * Returns the timer's stored expiry. The saved value is authoritative
+   * even for an unregistered slot, which no worker or context can mutate.
+   */
   [[nodiscard]] time_point timer_expiry(
       const detail::timer_slot& timer) const noexcept;
 
+  /**
+   * Starts a wait on the given timer. An active timer links the operation
+   * at its submitted head; an inactive (expired) timer stages an immediate
+   * completion on the timer-ready list without touching the shared CPU
+   * queue.
+   */
   void start_timer_wait(detail::timer_operation_base& operation,
                         detail::timer_slot& timer) noexcept;
 
@@ -929,14 +1050,25 @@ class BNIO_EXPORT io_context {
    */
   [[nodiscard]] bool begin_stop() noexcept;
 
-  // Consumes the timer's lock-protected list of active wait operations.
+  /**
+   * Consumes the timer's lock-protected list of submitted wait operations.
+   */
   [[nodiscard]] detail::timer_operation_queue take_timer_operations_locked(
       detail::timer_slot& timer) noexcept;
 
+  /**
+   * Stages the given detached wait operations on the timer-ready list with
+   * the given completion kind. The list is drained only by a native
+   * worker's passive timer check (or by the stopping thread).
+   */
   void enqueue_timer_operations_locked(
       detail::timer_operation_base* operations,
       detail::timer_completion_kind completion) noexcept;
 
+  /**
+   * Stages a single wait operation's completion kind onto the timer-ready
+   * list.
+   */
   void queue_timer_completion(
       detail::timer_operation_base& operation,
       detail::timer_completion_kind completion) noexcept;

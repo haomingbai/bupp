@@ -17,6 +17,9 @@ namespace bnio::async_io::bsd_native {
 
 namespace detail {
 
+/** Converts a positioned read/write syscall result into the operation
+ *  result encoding: the transferred byte count on success, or a negative
+ *  errno on failure. */
 [[nodiscard]] inline int positioned_io_result(ssize_t result) noexcept {
   if (result >= 0) {
     return static_cast<int>(result);
@@ -24,11 +27,16 @@ namespace detail {
   return -errno;
 }
 
+/** Returns whether the offset is representable as off_t. */
 [[nodiscard]] inline bool valid_file_offset(std::uint64_t offset) noexcept {
   return offset <=
          static_cast<std::uint64_t>(std::numeric_limits<off_t>::max());
 }
 
+/** Converts a nonblocking descriptor syscall result into the operation
+ *  result encoding: the transferred byte count on success; EINTR, EAGAIN,
+ *  and EWOULDBLOCK map to -EAGAIN so the caller retries after readiness;
+ *  any other failure maps to a negative errno. */
 [[nodiscard]] inline int nonblocking_descriptor_result(
     ssize_t result) noexcept {
   if (result >= 0) {

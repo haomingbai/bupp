@@ -26,8 +26,19 @@ namespace udp {
 class BNIO_EXPORT socket;
 }  // namespace udp
 
+/**
+ * Alias for the owning TCP stream socket type.
+ */
 using tcp_socket = tcp::socket;
+
+/**
+ * Alias for the owning TCP listening socket type.
+ */
 using tcp_acceptor = tcp::acceptor;
+
+/**
+ * Alias for the owning UDP datagram socket type.
+ */
 using udp_socket = udp::socket;
 
 /**
@@ -180,23 +191,66 @@ class BNIO_EXPORT tcp {
  */
 class BNIO_EXPORT udp {
  public:
+  /**
+   * Endpoint type used by UDP.
+   */
   using endpoint = bnio::ip::endpoint;
+
+  /**
+   * Owning UDP datagram socket type.
+   */
   using socket = bnio::udp::socket;
 
+  /**
+   * Creates an unspecified UDP protocol tag.
+   */
   udp() noexcept = default;
+
+  /**
+   * Copies a UDP protocol tag.
+   */
   udp(const udp&) noexcept = default;
+
+  /**
+   * Copies a UDP protocol tag.
+   */
   udp& operator=(const udp&) noexcept = default;
+
+  /**
+   * Moves a UDP protocol tag.
+   */
   udp(udp&&) noexcept = default;
+
+  /**
+   * Moves a UDP protocol tag.
+   */
   udp& operator=(udp&&) noexcept = default;
+
+  /**
+   * Destroys the UDP protocol tag.
+   */
   ~udp() noexcept = default;
 
+  /**
+   * Returns a UDP/IPv4 protocol tag.
+   */
   static udp v4() noexcept { return udp(async_io::ip::udp::v4()); }
+
+  /**
+   * Returns a UDP/IPv6 protocol tag.
+   */
   static udp v6() noexcept { return udp(async_io::ip::udp::v6()); }
 
+  /**
+   * Returns the IP version associated with this protocol tag.
+   */
   [[nodiscard]] bnio::ip::address::version version() const noexcept {
     return protocol_.version();
   }
 
+  /**
+   * Returns the async_io protocol tag represented by this value.
+   */
   [[nodiscard]] async_io::ip::udp async_io_protocol() const noexcept {
     return protocol_;
   }

@@ -237,6 +237,9 @@ template <class Receiver>
 class io_uring_datagram_receive_operation
     : public detail::io_uring_receiver_operation<Receiver> {
  public:
+  /**
+   * Creates a datagram receive operation for a connected socket.
+   */
   io_uring_datagram_receive_operation(io_uring_context& context,
                                       datagram_socket_view socket,
                                       const buffer_view& buffer,
@@ -249,11 +252,19 @@ class io_uring_datagram_receive_operation
     this->enable_eagain_rearm();
   }
 
+  /**
+   * Prepares the datagram receive SQE.
+   *
+   * @see io_uring_prep_recv
+   */
   void prepare(bnio::base::submission_queue_entry& sqe) noexcept override {
     sqe.prep_recv(socket_.native_handle(), buffer_.data,
                   detail::bounded_io_size(buffer_.size), receive_flags_);
   }
 
+  /**
+   * Starts the datagram receive operation.
+   */
   void start() noexcept { this->start_io(*this); }
 
  private:
@@ -269,6 +280,9 @@ template <class Receiver>
 class io_uring_datagram_send_operation
     : public detail::io_uring_receiver_operation<Receiver> {
  public:
+  /**
+   * Creates a datagram send operation for a connected socket.
+   */
   io_uring_datagram_send_operation(io_uring_context& context,
                                    datagram_socket_view socket,
                                    const buffer_view& buffer, int send_flags,
@@ -281,11 +295,19 @@ class io_uring_datagram_send_operation
     this->enable_eagain_rearm();
   }
 
+  /**
+   * Prepares the datagram send SQE.
+   *
+   * @see io_uring_prep_send
+   */
   void prepare(bnio::base::submission_queue_entry& sqe) noexcept override {
     sqe.prep_send(socket_.native_handle(), buffer_.data,
                   detail::bounded_io_size(buffer_.size), send_flags_);
   }
 
+  /**
+   * Starts the datagram send operation.
+   */
   void start() noexcept { this->start_io(*this); }
 
  private:
@@ -387,6 +409,9 @@ template <class Receiver>
 class io_uring_receive_from_operation
     : public detail::io_uring_receiver_operation<Receiver> {
  public:
+  /**
+   * Creates a receive-from operation that captures the sender's endpoint.
+   */
   io_uring_receive_from_operation(io_uring_context& context,
                                   datagram_socket_view socket,
                                   const buffer_view& buffer,
@@ -401,6 +426,11 @@ class io_uring_receive_from_operation
     this->enable_eagain_rearm();
   }
 
+  /**
+   * Prepares the receive-from SQE.
+   *
+   * @see io_uring_prep_recvmsg
+   */
   void prepare(bnio::base::submission_queue_entry& sqe) noexcept override {
     remote_address_ = {};
     buffer_entry_ = {buffer_.data, detail::bounded_io_size(buffer_.size)};
@@ -427,6 +457,9 @@ class io_uring_receive_from_operation
     detail::io_uring_receiver_operation<Receiver>::execute();
   }
 
+  /**
+   * Starts the receive-from operation.
+   */
   void start() noexcept { this->start_io(*this); }
 
  private:
@@ -446,6 +479,9 @@ template <class Receiver>
 class io_uring_send_to_operation
     : public detail::io_uring_receiver_operation<Receiver> {
  public:
+  /**
+   * Creates a send-to operation targeting an explicit destination endpoint.
+   */
   io_uring_send_to_operation(io_uring_context& context,
                              datagram_socket_view socket,
                              const buffer_view& buffer,
@@ -460,6 +496,11 @@ class io_uring_send_to_operation
     this->enable_eagain_rearm();
   }
 
+  /**
+   * Prepares the send-to SQE.
+   *
+   * @see io_uring_prep_sendmsg
+   */
   void prepare(bnio::base::submission_queue_entry& sqe) noexcept override {
     buffer_entry_ = {buffer_.data, detail::bounded_io_size(buffer_.size)};
     message_ = {};
@@ -470,6 +511,9 @@ class io_uring_send_to_operation
     sqe.prep_sendmsg(socket_.native_handle(), &message_, send_flags_);
   }
 
+  /**
+   * Starts the send-to operation.
+   */
   void start() noexcept { this->start_io(*this); }
 
  private:

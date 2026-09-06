@@ -74,18 +74,27 @@ enum class dns_query_flags : unsigned {
   numeric_service = 1U << 3U,
 };
 
+/**
+ * Combines two resolver flag sets into their union.
+ */
 [[nodiscard]] constexpr dns_query_flags operator|(
     dns_query_flags lhs, dns_query_flags rhs) noexcept {
   return static_cast<dns_query_flags>(static_cast<unsigned>(lhs) |
                                       static_cast<unsigned>(rhs));
 }
 
+/**
+ * Intersects two resolver flag sets.
+ */
 [[nodiscard]] constexpr dns_query_flags operator&(
     dns_query_flags lhs, dns_query_flags rhs) noexcept {
   return static_cast<dns_query_flags>(static_cast<unsigned>(lhs) &
                                       static_cast<unsigned>(rhs));
 }
 
+/**
+ * Returns whether @p flags contains @p flag.
+ */
 [[nodiscard]] constexpr bool has_dns_query_flag(dns_query_flags flags,
                                                 dns_query_flags flag) noexcept {
   return (flags & flag) != dns_query_flags::none;

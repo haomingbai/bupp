@@ -170,7 +170,7 @@ class stdin_guard {
     if (::fcntl(0, F_GETFD, 0) < 0 && errno == EBADF) {
       return true;  // closed and not (yet) reused.
     }
-    struct stat current{};
+    struct stat current {};
     if (::fstat(0, &current) != 0) {
       return true;
     }
@@ -195,7 +195,7 @@ class stdin_guard {
   // stat_valid_ ensures the default member initializer `stat_ {}` runs
   // first and the fstat snapshot survives; the other order zeroed the
   // snapshot after filling it and made replaced() a tautology.
-  struct stat stat_{};
+  struct stat stat_ {};
   int saved_;
   int flags_;
   bool stat_valid_;

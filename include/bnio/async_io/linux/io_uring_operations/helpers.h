@@ -95,6 +95,10 @@ class timeout_request {
   __kernel_timespec timeout_{};
 };
 
+/**
+ * Clamps a buffer size to the unsigned maximum accepted by io_uring SQE
+ * length fields.
+ */
 [[nodiscard]] constexpr unsigned bounded_io_size(std::size_t size) noexcept {
   constexpr auto max_size =
       static_cast<std::size_t>(std::numeric_limits<unsigned>::max());

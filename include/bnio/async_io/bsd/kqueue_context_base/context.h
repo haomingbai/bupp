@@ -28,14 +28,44 @@
 
 namespace bnio::async_io::bsd_native {
 
-/** Single-threaded run loop backed by a BSD kqueue. */
+/**
+ * Passive readiness event loop backed by a BSD kqueue.
+ *
+ * Single-owner and non-reentrant: at most one thread may call run() at a
+ * time, concurrent calls to run() on the same context are undefined
+ * behavior, and calling run() again after the single run loop has reached
+ * finished is not supported. The context owns one base::kqueue instance.
+ */
 class BNIO_EXPORT kqueue_context {
  public:
+  /**
+   * Monotonic clock used by async I/O scheduling.
+   */
   using steady_clock = bnio::async_io::steady_clock;
+
+  /**
+   * Clock used as the default async I/O scheduling clock.
+   */
   using clock = bnio::async_io::clock;
+
+  /**
+   * Wall-clock type for APIs that explicitly need system time.
+   */
   using system_clock = bnio::async_io::system_clock;
+
+  /**
+   * Canonical async I/O duration.
+   */
   using duration = bnio::async_io::duration;
+
+  /**
+   * Time point represented with the default async I/O clock.
+   */
   using time_point = bnio::async_io::time_point;
+
+  /**
+   * System-clock time point represented with async I/O duration precision.
+   */
   using system_time_point = bnio::async_io::system_time_point;
 
   /** Creates a closed context. */
@@ -44,18 +74,46 @@ class BNIO_EXPORT kqueue_context {
   /** Creates a context and attempts to open its kqueue. */
   explicit kqueue_context(const kqueue_context_options& options) noexcept;
 
-  /** Stops and releases the context kqueue. */
+  /**
+   * Stops and releases the context kqueue.
+   */
   ~kqueue_context() noexcept;
 
+  /**
+   * Copy construction is disabled because the context owns a kqueue.
+   */
   kqueue_context(const kqueue_context&) = delete;
+
+  /**
+   * Copy assignment is disabled because the context owns a kqueue.
+   */
   kqueue_context& operator=(const kqueue_context&) = delete;
+
+  /**
+   * Move construction is disabled because the context owns a kqueue and
+   * single-owner run-loop state.
+   */
   kqueue_context(kqueue_context&&) = delete;
+
+  /**
+   * Move assignment is disabled because the context owns a kqueue and
+   * single-owner run-loop state.
+   */
   kqueue_context& operator=(kqueue_context&&) = delete;
 
   /** Initializes the native queue and wakeup event. */
   int queue_init(const kqueue_context_options& options = {}) noexcept;
 
-  /** Releases the native queue and pending internal storage. */
+  /**
+   * Releases the native queue and pending internal storage.
+   *
+   * A context torn down without a clean finish (never run, fatal error,
+   * forced close) first runs the same abort-and-deliver path as finish():
+   * inflight and queued I/O is aborted and every completion executes
+   * synchronously on the calling thread, so each published operation
+   * reaches a terminal receiver call. A finished context releases without
+   * touching the shared queues its sibling workers still own.
+   */
   void queue_exit() noexcept;
 
   /** Returns whether the native queue is open. */
@@ -71,7 +129,7 @@ class BNIO_EXPORT kqueue_context {
   [[nodiscard]] auto async_read(descriptor_view descriptor, buffer_view buffer);
 
   /**
-   * Creates a positioned read sender whose start performs ::pread at the
+   * Creates a positioned read sender whose start performs @c pread() at the
    * given offset, without observing or advancing the kernel file position.
    */
   [[nodiscard]] auto async_read(random_access_file file, buffer_view buffer,
@@ -85,8 +143,9 @@ class BNIO_EXPORT kqueue_context {
                                  std::size_t size);
 
   /**
-   * Creates a positioned write sender whose start performs ::pwrite at the
-   * given offset, without observing or advancing the kernel file position.
+   * Creates a positioned write sender whose start performs @c pwrite() at
+   * the given offset, without observing or advancing the kernel file
+   * position.
    */
   [[nodiscard]] auto async_write(random_access_file file, const void* data,
                                  std::size_t size, std::uint64_t offset);
@@ -181,10 +240,40 @@ class BNIO_EXPORT kqueue_context {
    */
   [[nodiscard]] int enter_run_error() const noexcept { return 0; }
 
-  /** Posts an operation to the context run loop. */
+  /**
+   * Posts an operation to the context run loop.
+   *
+   * Takes the worker-local fast path when the publisher is this run loop's
+   * own thread (or in standalone mode); every other publication goes to
+   * the shared MPSC CPU queue and wakes a worker.
+   *
+   * Internal submission API. This function does not gate on the shared
+   * life_state; it always enqueues and never refuses work. Lifecycle
+   * gating is the caller's job: the io_context layer refuses submissions
+   * while stopping so nothing strands, and direct callers must guarantee
+   * the context keeps running until the operation reaches a terminal
+   * receiver call.
+   *
+   * @see bnio::io_context::publish_cpu
+   */
   int post(kqueue_operation_base& operation) noexcept;
 
-  /** Publishes I/O for passive preparation by the context run loop. */
+  /**
+   * Publishes I/O for passive preparation by the context run loop.
+   *
+   * Takes the worker-local fast path when the publisher is this run loop's
+   * own thread (or in standalone mode); every other publication goes to
+   * the shared MPSC I/O queue and wakes a worker.
+   *
+   * Internal submission API. This function does not gate on the shared
+   * life_state; it always enqueues and never refuses work. Lifecycle
+   * gating is the caller's job: the io_context layer refuses submissions
+   * while stopping so nothing strands, and direct callers must guarantee
+   * the context keeps running until the operation reaches a terminal
+   * receiver call.
+   *
+   * @see bnio::io_context::publish_io
+   */
   void publish_io(kqueue_io_operation_base& operation) noexcept;
 
   /**
@@ -219,12 +308,14 @@ class BNIO_EXPORT kqueue_context {
   /** Unregisters this worker's local state from the shared list. */
   void unregister_local_state() noexcept;
 
+  /** Lifecycle state for the context run loop. */
   enum class context_state {
     running,
     finishing,
     finished,
   };
 
+  /** Next action selected by the run loop. */
   enum class run_phase {
     run_ready_tasks,
     wait_for_work,
@@ -232,7 +323,9 @@ class BNIO_EXPORT kqueue_context {
     finished,
   };
 
+  /** Applies configuration from options to context member variables. */
   void apply_context_options(const kqueue_context_options& options) noexcept;
+  /** Verifies in debug builds that the context is running. */
   void assert_running() const noexcept;
 
   /**
@@ -257,11 +350,28 @@ class BNIO_EXPORT kqueue_context {
    */
   void drain_local_cpu_tasks() noexcept;
 
+  /**
+   * Publishes all operations from a local queue to the shared CPU-task
+   * queue.
+   */
   void push_cpu_tasks(operation_queue& operations) noexcept;
   /** Fetches and executes a batch of CPU tasks. Returns true if work ran. */
   [[nodiscard]] bool run_cpu_batch() noexcept;
 
-  /** Consumes staged local I/O tasks after ready CPU work. */
+  /**
+   * Consumes staged I/O tasks after ready CPU work, trying the worker's
+   * local queue first and the shared queue only when the local one is
+   * empty.
+   *
+   * Once a stop or close has been requested, the teardown guard at the top
+   * of this function routes every popped operation through
+   * drain_io_list_complete_stopped() instead of registering it: EV_ADD
+   * still succeeds while the kqueue fd is open, so an operation published
+   * while finish() drains its queues would otherwise be armed for real,
+   * and a receiver that keeps republishing ready I/O would starve the
+   * finish() break condition. This implements the not-yet-executed
+   * queued-work rule of io_context::stop().
+   */
   [[nodiscard]] bool consume_io_tasks() noexcept;
 
   /** Adds an I/O operation to the inflight doubly-linked list. */
@@ -291,28 +401,52 @@ class BNIO_EXPORT kqueue_context {
   /** Moves due passive-timer completions into the local CPU queue. */
   [[nodiscard]] bool consume_timeout_operations() noexcept;
 
+  /**
+   * Prepares one I/O operation through kqueue_helper and returns the
+   * helper's error, or -EINVAL when no native action was selected.
+   */
   [[nodiscard]] int prepare_io(kqueue_io_operation_base& operation) noexcept;
 
+  /**
+   * Publishes the sleeping state and links the worker into the shared
+   * suspend list before a blocking wait.
+   */
   void begin_wait() noexcept;
+  /** Unlinks the worker from the suspend list and clears the sleeping
+   *  state after a wait. */
   void end_wait() noexcept;
 
+  /**
+   * Wakes a sleeping run loop through the shared wake channel (guarded by
+   * the submit lock), falling back to this context's EVFILT_USER
+   * NOTE_TRIGGER in standalone mode.
+   */
   [[nodiscard]] int trigger_wakeup() noexcept;
+  /** Returns the sentinel udata tagging shared wake-channel events. */
   [[nodiscard]] static void* wakeup_user_data() noexcept;
+  /** Returns the sentinel udata tagging this context's own local wakeup
+   *  events. */
   [[nodiscard]] static void* local_wakeup_user_data() noexcept;
 
-  /** Classifies a kevent udata value into a dispatch kind. */
+  /** Kind of a kevent udata pointer, used to dispatch collected events. */
   enum class event_udata_kind {
     shared_wake,
     local_wake,
     operation,
   };
 
+  /** Classifies a kevent udata value into a dispatch kind. */
   [[nodiscard]] static event_udata_kind classify_udata(void* udata) noexcept;
 
+  /** Runs ready kevents, CPU tasks, and due timers. */
   [[nodiscard]] run_phase handle_run_ready_tasks() noexcept;
+  /** Waits for work when no tasks are immediately ready. */
   [[nodiscard]] run_phase handle_wait_for_work() noexcept;
+  /** Drains remaining work during shutdown. */
   [[nodiscard]] run_phase handle_finish_drain() noexcept;
+  /** Spins briefly for readiness events or posted tasks before blocking. */
   [[nodiscard]] run_phase spin_for_work() noexcept;
+  /** Waits for readiness events from the kqueue. */
   [[nodiscard]] run_phase wait_for_io_work() noexcept;
 
   /**
@@ -331,18 +465,36 @@ class BNIO_EXPORT kqueue_context {
       async_io::time_point& deadline, timespec& timeout,
       const timespec*& timeout_pointer) noexcept;
 
+  /** Returns whether the shared state has requested closing. */
   [[nodiscard]] bool closing_requested() const noexcept;
+  /** Returns whether stop() has been called on this context. */
   [[nodiscard]] bool stop_requested() const noexcept;
+  /** Returns whether the context should leave the running state. */
   [[nodiscard]] bool should_finish() const noexcept;
+  /**
+   * Drains ready events, CPU tasks, timer aborts, and inflight I/O, then
+   * marks the context finished. Every operation already published reaches
+   * a terminal receiver call before the run loop exits.
+   */
   void finish() noexcept;
 
+  /** Collects ready kevents and dispatches their tasks. Returns true if
+   *  work ran; when @p wait is set, blocks for the first event using
+   *  @p timeout (null for an unbounded wait). */
   [[nodiscard]] bool collect_ready_events(
       bool wait, const timespec* timeout = nullptr) noexcept;
+  /** Collects ready kevents into an operation queue and returns the task
+   *  count. */
   [[nodiscard]] unsigned collect_event_tasks(operation_queue& event_tasks,
                                              bool wait,
                                              const timespec* timeout) noexcept;
+  /** Dispatches collected event tasks locally or through the shared CPU
+   *  queue. */
   void dispatch_event_tasks(operation_queue& event_tasks,
                             unsigned task_count) noexcept;
+  /** Handles one collected kevent: wake-channel drains are consumed and
+   *  operation events resolve through their registration node. Returns
+   *  true when an operation task was produced. */
   [[nodiscard]] bool process_event(const bnio::base::event& event,
                                    operation_queue& tasks) noexcept;
   /**
@@ -383,8 +535,11 @@ class BNIO_EXPORT kqueue_context {
       kqueue_io_operation_base& operation, kqueue_registration_state& node,
       const bnio::base::event& event) noexcept;
 
+  /** Links every node of the operation into its (ident, filter) wait
+   *  queue, rolling back on failure. */
   [[nodiscard]] int register_operation(
       kqueue_io_operation_base& operation) noexcept;
+  /** Arms one node's kevent (EV_ADD | EV_RECEIPT) and marks it armed. */
   [[nodiscard]] int arm_registration(kqueue_registration_state& node) noexcept;
   /**
    * Arms the first armable node starting at `candidate`, looping past any
@@ -393,7 +548,10 @@ class BNIO_EXPORT kqueue_context {
    * wait queue.
    */
   void arm_queue_head(kqueue_registration_state* candidate) noexcept;
+  /** Disarms and unlinks every node of the operation. */
   void unregister_operation(kqueue_io_operation_base& operation) noexcept;
+  /** Translates a fired kevent into the subset of the requested poll mask
+   *  it satisfies. */
   [[nodiscard]] unsigned poll_result(
       unsigned poll_mask, const bnio::base::event& event) const noexcept;
 

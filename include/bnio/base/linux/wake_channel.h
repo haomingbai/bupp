@@ -20,7 +20,7 @@ namespace bnio::base {
  *
  * @warning A single write wakes ALL workers whose io_uring rings have
  * a pending IORING_POLL_ADD on this eventfd (minor thundering herd).
- * The per-worker overhead is one ::read returning EAGAIN plus one
+ * The per-worker overhead is one @c read returning EAGAIN plus one
  * pop_cpu_all() CAS — negligible for typical 4–8 worker concurrency.
  * During stop(), waking all workers is the desired behaviour.
  */

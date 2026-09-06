@@ -45,6 +45,7 @@ class io_uring_io_operation_base;
  * protection).
  */
 struct BNIO_EXPORT io_uring_local_task_queue_state {
+  /** Pushes one operation onto the local CPU queue as its new LIFO head. */
   void push_cpu(io_uring_operation_base& operation) noexcept;
 
   /** Pushes a linked list of tasks (order preserved relative to the caller's
@@ -54,8 +55,11 @@ struct BNIO_EXPORT io_uring_local_task_queue_state {
   /** Removes the whole CPU queue in bulk; used by fetch. */
   [[nodiscard]] io_uring_operation_base* pop_cpu_all() noexcept;
 
+  /** Head of the local CPU task queue. */
   io_uring_operation_base* cpu_head = nullptr;
 
+  /** Pushes one I/O operation onto the local I/O queue as its new LIFO
+   *  head; links through the inherited next field. */
   void push_io(io_uring_io_operation_base& operation) noexcept;
 
   /** Pushes a linked list of I/O tasks (the caller's order is preserved
@@ -65,10 +69,12 @@ struct BNIO_EXPORT io_uring_local_task_queue_state {
   /** Removes the whole I/O queue in bulk; used by consume_io_tasks(). */
   [[nodiscard]] io_uring_io_operation_base* pop_io_all() noexcept;
 
+  /** Head of the local I/O queue. */
   io_uring_io_operation_base* io_head = nullptr;
 
-  /** Doubly-linked list links for the shared suspend list. */
+  /** Previous node in the shared suspend list. */
   io_uring_local_task_queue_state* prev = nullptr;
+  /** Next node in the shared suspend list. */
   io_uring_local_task_queue_state* next = nullptr;
 
   /** Per-worker wake channel for directed wakeups. */
@@ -93,15 +99,32 @@ struct BNIO_EXPORT io_uring_worker_state_list {
 
 /** Shared MPSC CPU/I/O queues and worker-group lifecycle state. */
 struct BNIO_EXPORT io_uring_task_queue_state {
+  /** Non-blocking fetch entry point into the shared lazy timer heap.
+   *
+   *  Invoked with the opaque heap pointer stored in @p timeout_heap; the
+   *  second argument receives the earliest remaining deadline and the
+   *  third receives the linked list of operations whose timers expired,
+   *  ready to be pushed onto a CPU queue.
+   *
+   *  @return true when the fetch ran; false when another worker was
+   *          already draining the heap.
+   */
   using try_fetch_timeout_fn = bool (*)(void*, async_io::time_point&,
                                         io_uring_operation_base*&) noexcept;
 
+  /** Atomically pushes one operation onto the shared CPU queue as its new
+   *  head (lock-free MPSC with release publication). */
   void push_cpu(io_uring_operation_base& operation) noexcept;
 
+  /** Atomically removes and returns the whole shared CPU queue. */
   [[nodiscard]] io_uring_operation_base* pop_cpu_all() noexcept;
 
+  /** Atomically pushes one I/O operation onto the shared I/O queue as its
+   *  new head; the publisher must pair the push with a wakeup of a
+   *  possibly sleeping worker. */
   void push_io(io_uring_io_operation_base& operation) noexcept;
 
+  /** Atomically removes and returns the whole shared I/O queue. */
   [[nodiscard]] io_uring_io_operation_base* pop_io_all() noexcept;
 
   /** Pops the whole shared I/O queue and delivers every operation through
@@ -122,7 +145,9 @@ struct BNIO_EXPORT io_uring_task_queue_state {
    */
   [[nodiscard]] bool wake_one_sleeping() noexcept;
 
+  /** Head of the shared MPSC CPU task queue. */
   std::atomic<io_uring_operation_base*> cpu_head{nullptr};
+  /** Head of the shared MPSC I/O task queue. */
   std::atomic<io_uring_io_operation_base*> io_head{nullptr};
   /** Workers not blocked in the native poller (active workers). Incremented
    *  by enter_run(), decremented by begin_wait(), restored by end_wait().
@@ -138,10 +163,14 @@ struct BNIO_EXPORT io_uring_task_queue_state {
    *  own lock. */
   io_uring_worker_state_list workers;
 
-  std::atomic<int> life_state{0};  // 0 = running, 1 = stopping
+  /** Context lifecycle state: 0 while running, 1 once stop() has begun. */
+  std::atomic<int> life_state{0};
 
-  /** Opaque shared lazy timer heap and its non-blocking fetch entry point. */
+  /** Opaque pointer to the shared lazy timer heap; created and owned by
+   *  io_context. */
   void* timeout_heap = nullptr;
+  /** Non-blocking fetch entry point for the timer heap; set by io_context
+   *  when the heap is created and cleared when it is destroyed. */
   try_fetch_timeout_fn try_fetch_timeout_operations = nullptr;
 
   /** Shared wake channel owned by io_context.
@@ -255,8 +284,9 @@ class BNIO_EXPORT io_uring_io_operation_base : public io_uring_operation_base {
    *  (false). */
   [[nodiscard]] virtual bool rearm_on_eagain() const noexcept { return false; }
 
-  /** Intrusive links for the inflight doubly-linked list. */
+  /** Next operation in the inflight doubly-linked list. */
   io_uring_io_operation_base* io_next = nullptr;
+  /** Previous operation in the inflight doubly-linked list. */
   io_uring_io_operation_base* io_prev = nullptr;
 };
 

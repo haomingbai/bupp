@@ -97,7 +97,7 @@ class io_uring_receiver_operation : public io_uring_io_operation_base {
   void execute() noexcept override {
     switch (completion_) {
       case io_uring_receiver_completion::value:
-        // §9.2 guard: CQE handler only updates result/flags; it does not
+        // The CQE handler only updates result/flags; it does not
         // reclassify completion_. When result < 0 (-errno), ec must be
         // re-derived from result, otherwise the error would be masked.
         if (result < 0) {

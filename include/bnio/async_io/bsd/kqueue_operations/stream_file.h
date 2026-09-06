@@ -30,17 +30,21 @@ namespace bnio::async_io::bsd_native {
  */
 class kqueue_stream_file_read_request {
  public:
+  /** Completion signals: set_value(ec, bytes) or set_stopped(). */
   using completion_signatures = bexec::completion_signatures<
       bexec::set_value_t(std::error_code, std::size_t), bexec::set_stopped_t()>;
 
+  /** Constructs the request from the descriptor and receive buffer. */
   kqueue_stream_file_read_request(descriptor_view descriptor,
                                   buffer_view buffer) noexcept
       : descriptor_(descriptor), buffer_(buffer) {}
 
+  /** Registers the descriptor for read readiness with @p helper. */
   void prepare(kqueue_helper& helper) noexcept {
     helper.prep_read(descriptor_.native_handle());
   }
 
+  /** Validates the buffer and attempts one immediate read. */
   [[nodiscard]] int start_io() noexcept {
     if (buffer_.size > 0 && buffer_.data == nullptr) {
       return -EFAULT;
@@ -48,9 +52,11 @@ class kqueue_stream_file_read_request {
     return perform_io();
   }
 
+  /** Classifies the descriptor once via fstat, then performs one read:
+   *  inline for regular files, nonblocking otherwise. */
   [[nodiscard]] int perform_io() noexcept {
     if (!resolved_) {
-      struct stat status{};
+      struct stat status {};
       if (::fstat(descriptor_.native_handle(), &status) != 0) {
         return -errno;
       }
@@ -77,10 +83,14 @@ class kqueue_stream_file_read_request {
                detail::bounded_io_size(buffer_.size)));
   }
 
+  /** Returns whether a retryable result should wait for kqueue readiness;
+   *  regular files never wait. */
   [[nodiscard]] bool should_wait(int result) const noexcept {
     return !regular_file_ && detail::should_wait(result);
   }
 
+  /** Delivers the byte count to @p receiver, clamping negative results to
+   *  zero. */
   template <class Receiver>
   void set_value(Receiver&& receiver, std::error_code ec, int result,
                  unsigned) noexcept {
@@ -102,17 +112,21 @@ class kqueue_stream_file_read_request {
  */
 class kqueue_stream_file_write_request {
  public:
+  /** Completion signals: set_value(ec, bytes) or set_stopped(). */
   using completion_signatures = bexec::completion_signatures<
       bexec::set_value_t(std::error_code, std::size_t), bexec::set_stopped_t()>;
 
+  /** Constructs the request from the descriptor, data, and size. */
   kqueue_stream_file_write_request(descriptor_view descriptor, const void* data,
                                    std::size_t size) noexcept
       : descriptor_(descriptor), data_(data), size_(size) {}
 
+  /** Registers the descriptor for write readiness with @p helper. */
   void prepare(kqueue_helper& helper) noexcept {
     helper.prep_write(descriptor_.native_handle());
   }
 
+  /** Validates the buffer and attempts one immediate write. */
   [[nodiscard]] int start_io() noexcept {
     if (size_ > 0 && data_ == nullptr) {
       return -EFAULT;
@@ -120,9 +134,11 @@ class kqueue_stream_file_write_request {
     return perform_io();
   }
 
+  /** Classifies the descriptor once via fstat, then performs one write:
+   *  inline for regular files, nonblocking otherwise. */
   [[nodiscard]] int perform_io() noexcept {
     if (!resolved_) {
-      struct stat status{};
+      struct stat status {};
       if (::fstat(descriptor_.native_handle(), &status) != 0) {
         return -errno;
       }
@@ -148,10 +164,14 @@ class kqueue_stream_file_write_request {
         descriptor_.native_handle(), data_, detail::bounded_io_size(size_)));
   }
 
+  /** Returns whether a retryable result should wait for kqueue readiness;
+   *  regular files never wait. */
   [[nodiscard]] bool should_wait(int result) const noexcept {
     return !regular_file_ && detail::should_wait(result);
   }
 
+  /** Delivers the byte count to @p receiver, clamping negative results to
+   *  zero. */
   template <class Receiver>
   void set_value(Receiver&& receiver, std::error_code ec, int result,
                  unsigned) noexcept {
@@ -167,8 +187,13 @@ class kqueue_stream_file_write_request {
   bool resolved_ = false;
 };
 
+/** Sender returned by kqueue_context::async_read for streaming
+ *  descriptors. */
 using kqueue_stream_file_read_sender =
     detail::kqueue_ready_io_sender<kqueue_stream_file_read_request>;
+
+/** Sender returned by kqueue_context::async_write for streaming
+ *  descriptors. */
 using kqueue_stream_file_write_sender =
     detail::kqueue_ready_io_sender<kqueue_stream_file_write_request>;
 
@@ -192,13 +217,17 @@ inline auto kqueue_context::async_write(descriptor_view descriptor,
 class kqueue_raw_stream_file_read_request
     : public kqueue_stream_file_read_request {
  public:
+  /** Inherits the base class constructor. */
   using kqueue_stream_file_read_request::kqueue_stream_file_read_request;
 
+  /** Completion signals: set_value(ec, native result, flags) or
+   *  set_stopped(). */
   using completion_signatures =
       bexec::completion_signatures<bexec::set_value_t(std::error_code, int,
                                                       unsigned),
                                    bexec::set_stopped_t()>;
 
+  /** Forwards the raw native result and flags to @p receiver unchanged. */
   template <class Receiver>
   void set_value(Receiver&& receiver, std::error_code ec, int result,
                  unsigned flags) noexcept {
@@ -210,16 +239,20 @@ class kqueue_raw_stream_file_read_request
 class kqueue_raw_stream_file_write_request
     : public kqueue_stream_file_write_request {
  public:
+  /** Constructs the request from the descriptor and buffer view. */
   kqueue_raw_stream_file_write_request(descriptor_view descriptor,
                                        buffer_view buffer)
       : kqueue_stream_file_write_request(descriptor, buffer.data, buffer.size) {
   }
 
+  /** Completion signals: set_value(ec, native result, flags) or
+   *  set_stopped(). */
   using completion_signatures =
       bexec::completion_signatures<bexec::set_value_t(std::error_code, int,
                                                       unsigned),
                                    bexec::set_stopped_t()>;
 
+  /** Forwards the raw native result and flags to @p receiver unchanged. */
   template <class Receiver>
   void set_value(Receiver&& receiver, std::error_code ec, int result,
                  unsigned flags) noexcept {
@@ -233,6 +266,8 @@ class kqueue_read_operation
     : public detail::kqueue_ready_io_operation<
           kqueue_raw_stream_file_read_request, Receiver> {
  public:
+  /** Constructs the operation from its context, descriptor, buffer, and
+   *  receiver. */
   kqueue_read_operation(kqueue_context& context, descriptor_view descriptor,
                         buffer_view buffer, Receiver receiver)
       : detail::kqueue_ready_io_operation<kqueue_raw_stream_file_read_request,
@@ -247,6 +282,8 @@ class kqueue_write_operation
     : public detail::kqueue_ready_io_operation<
           kqueue_raw_stream_file_write_request, Receiver> {
  public:
+  /** Constructs the operation from its context, descriptor, buffer, and
+   *  receiver. */
   kqueue_write_operation(kqueue_context& context, descriptor_view descriptor,
                          buffer_view buffer, Receiver receiver)
       : detail::kqueue_ready_io_operation<kqueue_raw_stream_file_write_request,

@@ -17,7 +17,10 @@
 
 namespace bnio::udp {
 
-/** Creates a DNS query restricted to UDP endpoints. */
+/**
+ * Creates a dns_query with the UDP transport and the address-family filter
+ * already set, ready to pass to async_resolve().
+ */
 [[nodiscard]] inline dns_query make_resolve_query(
     std::string_view host, std::string_view service,
     ip::udp protocol = {}) noexcept {
@@ -27,7 +30,11 @@ namespace bnio::udp {
   return query;
 }
 
-/** Creates a DNS query restricted to UDP endpoints and a numeric port. */
+/**
+ * Creates a dns_query with the UDP transport and the address-family filter
+ * already set, resolving a numeric port as the service, ready to pass to
+ * async_resolve().
+ */
 [[nodiscard]] inline dns_query make_resolve_query(
     std::string_view host, std::uint16_t port, ip::udp protocol = {}) noexcept {
   dns_query query(host, port);

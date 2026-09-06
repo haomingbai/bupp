@@ -23,12 +23,23 @@ class kqueue_helper;
 class kqueue_operation_base;
 class kqueue_io_operation_base;
 
-/** Native action selected for a kqueue operation. */
+/**
+ * Native action selected for a kqueue operation.
+ *
+ * Chosen by prepare() through kqueue_helper and consumed by the run loop
+ * when registering the operation and dispatching a fired readiness event.
+ */
 enum class kqueue_task : std::uint8_t {
+  /** No action selected; the operation cannot be registered yet. */
   none,
+  /** Completes without a native registration (prep_nop). */
   nop,
+  /** One EVFILT_READ registration (prep_read). */
   read,
+  /** One EVFILT_WRITE registration (prep_write). */
   write,
+  /** EVFILT_READ and/or EVFILT_WRITE per the original poll mask
+   *  (prep_poll_add). */
   poll,
 };
 
@@ -64,6 +75,7 @@ struct kqueue_registration_state {
 
   /** Intrusive wait-queue links for the (ident, filter) list. */
   kqueue_registration_state* wait_next = nullptr;
+  /** Reverse link paired with wait_next for the (ident, filter) list. */
   kqueue_registration_state* wait_prev = nullptr;
 };
 
@@ -89,6 +101,7 @@ struct kqueue_registration_state {
  * protection).
  */
 struct BNIO_EXPORT kqueue_local_task_queue_state {
+  /** Pushes a single task onto the local CPU queue (LIFO head insert). */
   void push_cpu(kqueue_operation_base& operation) noexcept;
 
   /** Pushes a linked list of tasks (order preserved relative to the caller's
@@ -98,8 +111,11 @@ struct BNIO_EXPORT kqueue_local_task_queue_state {
   /** Removes the whole CPU queue in bulk; used by fetch. */
   [[nodiscard]] kqueue_operation_base* pop_cpu_all() noexcept;
 
+  /** Head of the intrusive local CPU queue; nodes chain through next. */
   kqueue_operation_base* cpu_head = nullptr;
 
+  /** Pushes a single I/O task onto the local I/O queue (LIFO head insert).
+   */
   void push_io(kqueue_io_operation_base& operation) noexcept;
 
   /** Pushes a linked list of I/O tasks (the caller's order is preserved
@@ -109,10 +125,12 @@ struct BNIO_EXPORT kqueue_local_task_queue_state {
   /** Removes the whole I/O queue in bulk; used by consume_io_tasks(). */
   [[nodiscard]] kqueue_io_operation_base* pop_io_all() noexcept;
 
+  /** Head of the intrusive local I/O queue; nodes chain through io_next. */
   kqueue_io_operation_base* io_head = nullptr;
 
   /** Doubly-linked list links for the shared suspend list. */
   kqueue_local_task_queue_state* prev = nullptr;
+  /** Forward link for the shared suspend list (see prev). */
   kqueue_local_task_queue_state* next = nullptr;
 
   /** Per-worker wake channel for directed wakeups. */
@@ -137,15 +155,23 @@ struct BNIO_EXPORT kqueue_worker_state_list {
 
 /** Shared MPSC CPU/I/O queues and worker-group lifecycle state. */
 struct BNIO_EXPORT kqueue_task_queue_state {
+  /**
+   * Signature of the shared timeout heap's non-blocking fetch entry point:
+   * fetches due timer operations and reports whether a deadline exists.
+   */
   using try_fetch_timeout_fn = bool (*)(void*, async_io::time_point&,
                                         kqueue_operation_base*&) noexcept;
 
+  /** Atomically pushes one operation onto the shared CPU queue. */
   void push_cpu(kqueue_operation_base& operation) noexcept;
 
+  /** Atomically removes and returns the entire shared CPU queue. */
   [[nodiscard]] kqueue_operation_base* pop_cpu_all() noexcept;
 
+  /** Atomically pushes one I/O operation onto the shared I/O queue. */
   void push_io(kqueue_io_operation_base& operation) noexcept;
 
+  /** Atomically removes and returns the entire shared I/O queue. */
   [[nodiscard]] kqueue_io_operation_base* pop_io_all() noexcept;
 
   /** Pops the whole shared I/O queue and delivers every operation through
@@ -166,7 +192,9 @@ struct BNIO_EXPORT kqueue_task_queue_state {
    */
   [[nodiscard]] bool wake_one_sleeping() noexcept;
 
+  /** Head of the shared MPSC CPU queue; nodes chain through next. */
   std::atomic<kqueue_operation_base*> cpu_head{nullptr};
+  /** Head of the shared MPSC I/O queue; nodes chain through io_next. */
   std::atomic<kqueue_io_operation_base*> io_head{nullptr};
   /** Workers not blocked in the native poller (active workers). Incremented
    *  by enter_run(), decremented by begin_wait(), restored by end_wait().
@@ -182,9 +210,13 @@ struct BNIO_EXPORT kqueue_task_queue_state {
    *  own lock. */
   kqueue_worker_state_list workers;
 
-  std::atomic<int> life_state{0};  // 0 = running, 1 = stopping
-  /** Opaque shared lazy timer heap and its non-blocking fetch entry point. */
+  /** Lifecycle flag: 0 = running, 1 = stopping. */
+  std::atomic<int> life_state{0};
+  /** Opaque pointer to the shared lazy timer heap; created and owned by
+   *  io_context. */
   void* timeout_heap = nullptr;
+  /** Fetch entry point into the shared timeout heap; set by io_context
+   *  together with timeout_heap. */
   try_fetch_timeout_fn try_fetch_timeout_operations = nullptr;
 
   /** Shared wake channel owned by io_context.
@@ -220,17 +252,37 @@ class BNIO_EXPORT kqueue_operation_base {
   /** Intrusive next pointer used by context task queues. */
   kqueue_operation_base* next = nullptr;
 
-  /** Native completion result, or a negative errno. */
+  /**
+   * Completion result copied from the readiness event or the native I/O
+   * step; a negative errno reports a recoverable failure.
+   */
   int result = 0;
 
-  /** Native kevent flags copied from the readiness notification. */
+  /**
+   * Native kevent flags copied from the readiness notification.
+   */
   unsigned flags = 0;
 
+  /** Creates an unlinked operation base. */
   kqueue_operation_base() noexcept = default;
+
+  /** Copy construction is disabled because operations are queued
+   *  intrusively. */
   kqueue_operation_base(const kqueue_operation_base&) = delete;
+
+  /** Copy assignment is disabled because operations are queued
+   *  intrusively. */
   kqueue_operation_base& operator=(const kqueue_operation_base&) = delete;
+
+  /** Move construction is disabled because operations are queued
+   *  intrusively. */
   kqueue_operation_base(kqueue_operation_base&&) = delete;
+
+  /** Move assignment is disabled because operations are queued
+   *  intrusively. */
   kqueue_operation_base& operator=(kqueue_operation_base&&) = delete;
+
+  /** Destroys the operation base. */
   virtual ~kqueue_operation_base() = default;
 
   /** Completes the operation on the context run loop. */
@@ -247,10 +299,15 @@ class BNIO_EXPORT kqueue_io_operation_base : public kqueue_operation_base {
   kqueue_io_operation_base& operator=(kqueue_io_operation_base&&) = delete;
   ~kqueue_io_operation_base() override = default;
 
-  /** Intrusive link used by local and shared I/O queues. */
+  /**
+   * Intrusive link used by the local and shared I/O queues. An operation is
+   * either queued or inflight, never both, so this field doubles as the
+   * queue link while io_next/io_prev together carry the inflight
+   * doubly-linked list.
+   */
   kqueue_io_operation_base* io_next = nullptr;
 
-  /** Reverse link for inflight doubly-linked list during shutdown. */
+  /** Reverse link for the inflight doubly-linked list. */
   kqueue_io_operation_base* io_prev = nullptr;
 
   /**
@@ -261,6 +318,7 @@ class BNIO_EXPORT kqueue_io_operation_base : public kqueue_operation_base {
    * before the operation is registered with the kqueue.
    */
   std::array<kqueue_registration_state, 2> registrations{};
+  /** Number of valid entries in registrations (0-2). */
   std::uint8_t registration_count = 0;
 
   /** Describes the native registration after the run loop takes this task. */

@@ -24,8 +24,8 @@ struct join_flag_recv {
 // point) or aborts via set_value(operation_canceled); set_stopped is a
 // contract violation.
 struct schedule_recv {
-  std::atomic<int>* counter = nullptr;   // every terminal call
-  std::atomic<int>* ok = nullptr;        // set_value({}) — ran before the stop
+  std::atomic<int>* counter = nullptr;  // every terminal call
+  std::atomic<int>* ok = nullptr;       // set_value({}) — ran before the stop
   std::atomic<int>* canceled = nullptr;  // set_value(operation_canceled)
   std::atomic<int>* stopped = nullptr;   // set_stopped (contract violation)
   void set_value(std::error_code ec) noexcept {

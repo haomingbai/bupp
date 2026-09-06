@@ -19,6 +19,7 @@
 
 namespace bnio::async_io::bsd_native::detail {
 
+/** Returns whether the receiver's associated stop token is canceled. */
 template <class Receiver>
 [[nodiscard]] bool stop_requested(const Receiver& receiver) noexcept {
   auto environment = bexec::get_env(receiver);
@@ -26,10 +27,15 @@ template <class Receiver>
   return token.stop_requested();
 }
 
+/** Returns whether the result is a transient would-block (-EAGAIN or
+ *  -EWOULDBLOCK) requiring another readiness round. */
 [[nodiscard]] inline bool should_wait(int result) noexcept {
   return result == -EAGAIN || result == -EWOULDBLOCK;
 }
 
+/** Returns whether the operation must wait for readiness after @p result.
+ *  Prefers the request's own should_wait() when it provides one; otherwise
+ *  falls back to the errno-based check. */
 template <class Request>
 [[nodiscard]] bool should_wait(Request& request, int result) noexcept {
   if constexpr (requires { request.should_wait(result); }) {
@@ -60,34 +66,61 @@ concept has_start_io = requires(Request& req) {
 template <class Request, class Receiver>
 class kqueue_ready_io_operation : public kqueue_io_operation_base {
  public:
+  /**
+   * Creates the operation state bound to the context, request, and
+   * receiver.
+   */
   kqueue_ready_io_operation(kqueue_context& context, Request request,
                             Receiver receiver)
       : context_(&context),
         request_(std::move(request)),
         receiver_(std::move(receiver)) {}
 
+  /**
+   * Copy construction is disabled because operations are queued intrusively.
+   */
   kqueue_ready_io_operation(const kqueue_ready_io_operation&) = delete;
+
+  /**
+   * Copy assignment is disabled because operations are queued intrusively.
+   */
   kqueue_ready_io_operation& operator=(const kqueue_ready_io_operation&) =
       delete;
+
+  /**
+   * Move construction is disabled because operations are queued intrusively.
+   */
   kqueue_ready_io_operation(kqueue_ready_io_operation&&) = delete;
+
+  /**
+   * Move assignment is disabled because operations are queued intrusively.
+   */
   kqueue_ready_io_operation& operator=(kqueue_ready_io_operation&&) = delete;
 
+  /** Delegates native registration preparation to the request. */
   void prepare(kqueue_helper& helper) noexcept override {
     request_.prepare(helper);
   }
 
+  /** Records the submission failure errno as the completion result. */
   void complete_submit_error(int result_code) noexcept override {
     result = result_code;
   }
 
+  /** Selects the stop channel for an aborting io_context::stop(). */
   void complete_submit_stopped() noexcept override { stopped_ = true; }
 
+  /** Returns true: this operation performs the native I/O itself. */
   [[nodiscard]] bool owns_io_step() const noexcept override { return true; }
 
+  /** Performs one bounded nonblocking I/O call through the request. */
   [[nodiscard]] int perform_io() noexcept override {
     return request_.perform_io();
   }
 
+  /** Starts the operation: checks the stop token, attempts an immediate
+   *  nonblocking I/O step, and otherwise publishes the operation for
+   *  passive preparation by the run loop. */
   void start() noexcept {
     if (detail::stop_requested(receiver_)) {
       stopped_ = true;
@@ -158,9 +191,27 @@ class kqueue_ready_io_operation : public kqueue_io_operation_base {
     }
   }
 
+  /**
+   * Context whose run loop drives this operation.
+   */
   kqueue_context* context_;
+
+  /**
+   * Request that prepares the kqueue registration, performs the native
+   * I/O step, and translates the completion into set_value arguments.
+   */
   Request request_;
+
+  /**
+   * Receiver completed by this operation.
+   */
   std::remove_cvref_t<Receiver> receiver_;
+
+  /**
+   * Marks the stop channel (io_context::stop() abort, or a stop-token
+   * cancel observed at start()); execute()'s token arbitration decides
+   * the final signal.
+   */
   bool stopped_ = false;
 };
 
@@ -168,17 +219,23 @@ class kqueue_ready_io_operation : public kqueue_io_operation_base {
 template <class Request>
 class kqueue_ready_io_sender {
  public:
+  /** Completion signatures forwarded from the request type. */
   using completion_signatures = typename Request::completion_signatures;
 
+  /** Creates a sender bound to the context and request. */
   kqueue_ready_io_sender(kqueue_context& context, Request request) noexcept
       : context_(&context), request_(std::move(request)) {}
 
+  /** Connects the sender to a receiver, moving the request into the
+   *  created operation state. */
   template <class Receiver>
   auto connect(Receiver receiver) && {
     return kqueue_ready_io_operation<Request, std::remove_cvref_t<Receiver>>(
         *context_, std::move(request_), std::move(receiver));
   }
 
+  /** Connects the sender to a receiver, copying the request into the
+   *  created operation state. */
   template <class Receiver>
     requires std::copy_constructible<Request>
   auto connect(Receiver receiver) const& {

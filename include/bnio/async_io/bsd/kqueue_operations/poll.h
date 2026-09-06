@@ -22,9 +22,11 @@ namespace bnio::async_io::bsd_native {
 /** Prepared kqueue poll request reusable by higher abstraction layers. */
 class kqueue_poll_request {
  public:
+  /** Creates a prepared poll request for the descriptor and event mask. */
   kqueue_poll_request(descriptor_view descriptor, unsigned poll_mask) noexcept
       : descriptor_(descriptor), poll_mask_(poll_mask) {}
 
+  /** Stages the poll-add registration on the helper. */
   void prepare(kqueue_helper& helper) const noexcept {
     helper.prep_poll_add(descriptor_.native_handle(), poll_mask_);
   }
@@ -39,16 +41,20 @@ template <class Receiver>
 class kqueue_poll_operation
     : public detail::kqueue_receiver_operation<Receiver> {
  public:
+  /** Creates the operation state bound to the context, descriptor, mask,
+   *  and receiver. */
   kqueue_poll_operation(kqueue_context& context, descriptor_view descriptor,
                         unsigned poll_mask, Receiver receiver)
       : detail::kqueue_receiver_operation<Receiver>(context,
                                                     std::move(receiver)),
         request_(descriptor, poll_mask) {}
 
+  /** Delegates native registration preparation to the poll request. */
   void prepare(kqueue_helper& helper) noexcept override {
     request_.prepare(helper);
   }
 
+  /** Starts the poll through the receiver-operation start path. */
   void start() noexcept { this->start_io(*this); }
 
  private:
@@ -59,6 +65,8 @@ class kqueue_poll_operation
 template <class Receiver>
 class kqueue_poll_sender_operation : public kqueue_io_operation_base {
  public:
+  /** Creates the operation state bound to the context, descriptor, mask,
+   *  and receiver. */
   kqueue_poll_sender_operation(kqueue_context& context,
                                descriptor_view descriptor, unsigned poll_mask,
                                Receiver receiver)
@@ -180,10 +188,13 @@ class kqueue_poll_sender {
   using completion_signatures = bexec::completion_signatures<
       bexec::set_value_t(std::error_code, unsigned), bexec::set_stopped_t()>;
 
+  /** Creates a typed poll sender for the descriptor and event mask. */
   kqueue_poll_sender(kqueue_context& context, descriptor_view descriptor,
                      unsigned poll_mask) noexcept
       : context_(&context), descriptor_(descriptor), poll_mask_(poll_mask) {}
 
+  /** Connects the sender to a receiver, creating the poll operation
+   *  state. */
   template <class Receiver>
   auto connect(Receiver receiver) const {
     return kqueue_poll_sender_operation<std::remove_cvref_t<Receiver>>(

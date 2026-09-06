@@ -263,9 +263,13 @@ being prepared and submitted — with the ring going away, a submit failure
 such as `EBADFD` would surface as a generic error where the contract
 requires the stop channel, and the guard also implements the
 not-yet-executed queued-work rule. The guard gates only the
-stopping/closing state; the normal run path is unchanged. kqueue needs no
-counterpart: `EV_ADD` still succeeds before the kqueue fd closes, so its
-operations reach the inflight→abort path and its correct channel.
+stopping/closing state; the normal run path is unchanged. kqueue
+`consume_io_tasks()` carries the same teardown guard
+(`kqueue_context::consume_io_tasks()`): an `EV_ADD` during teardown would
+arm a new event filter and let an operation published while `finish()`
+drains its queues run for real, so on kqueue too the drained operations
+are routed through the stop channel instead of being registered. See
+[`lifecycle.md`](../lifecycle.md) for the full teardown rules.
 
 `queue_exit()` delivers as well: it marks the context finishing and runs the
 same abort-and-deliver path as `finish()` before closing the ring, so a

@@ -20,6 +20,7 @@ namespace bnio::async_io::bsd_native {
 template <class Receiver>
 class kqueue_post_operation : public kqueue_operation_base {
  public:
+  /** Creates the operation bound to the context and receiver. */
   kqueue_post_operation(kqueue_context& context, Receiver receiver)
       : context_(&context), receiver_(std::move(receiver)) {}
 
@@ -37,6 +38,8 @@ class kqueue_post_operation : public kqueue_operation_base {
     }
   }
 
+  /** Records whether the receiver's stop token is canceled and posts the
+   *  operation for completion on the context. */
   void start() noexcept {
     auto environment = bexec::get_env(receiver_);
     auto token = bexec::query(environment, bexec::get_stop_token);
@@ -55,12 +58,15 @@ template <class Receiver>
 class kqueue_nop_operation
     : public detail::kqueue_receiver_operation<Receiver> {
  public:
+  /** Creates the operation bound to the context and receiver. */
   kqueue_nop_operation(kqueue_context& context, Receiver receiver)
       : detail::kqueue_receiver_operation<Receiver>(context,
                                                     std::move(receiver)) {}
 
+  /** Prepares a nop registration that only wakes the run loop. */
   void prepare(kqueue_helper& helper) noexcept override { helper.prep_nop(); }
 
+  /** Starts the nop through the receiver-operation start path. */
   void start() noexcept { this->start_io(*this); }
 };
 
@@ -69,14 +75,17 @@ template <class Receiver, class Prepare>
 class kqueue_raw_operation
     : public detail::kqueue_receiver_operation<Receiver> {
  public:
+  /** Creates the operation with a caller-supplied preparation callable. */
   kqueue_raw_operation(kqueue_context& context, Prepare prepare,
                        Receiver receiver)
       : detail::kqueue_receiver_operation<Receiver>(context,
                                                     std::move(receiver)),
         prepare_(std::move(prepare)) {}
 
+  /** Runs the caller-supplied preparation callable on the helper. */
   void prepare(kqueue_helper& helper) noexcept override { prepare_(helper); }
 
+  /** Starts the operation through the receiver-operation start path. */
   void start() noexcept { this->start_io(*this); }
 
  private:

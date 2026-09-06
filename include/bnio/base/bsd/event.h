@@ -129,7 +129,7 @@ class BNIO_EXPORT event {
   [[nodiscard]] bool has_eof() const noexcept;
 
  private:
-  struct kevent event_{};
+  struct kevent event_ {};
 };
 
 static_assert(std::is_standard_layout_v<event>);

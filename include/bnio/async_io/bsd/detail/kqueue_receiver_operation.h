@@ -42,22 +42,40 @@ enum class kqueue_receiver_completion {
 template <class Receiver>
 class kqueue_receiver_operation : public kqueue_io_operation_base {
  public:
+  /**
+   * Copy construction is disabled because operations are queued intrusively.
+   */
   kqueue_receiver_operation(const kqueue_receiver_operation&) = delete;
+
+  /**
+   * Copy assignment is disabled because operations are queued intrusively.
+   */
   kqueue_receiver_operation& operator=(const kqueue_receiver_operation&) =
       delete;
+
+  /**
+   * Move construction is disabled because operations are queued intrusively.
+   */
   kqueue_receiver_operation(kqueue_receiver_operation&&) = delete;
+
+  /**
+   * Move assignment is disabled because operations are queued intrusively.
+   */
   kqueue_receiver_operation& operator=(kqueue_receiver_operation&&) = delete;
+
+  /**
+   * Destroys the operation without delivering an additional signal.
+   */
   ~kqueue_receiver_operation() noexcept override = default;
 
   /**
    * Delivers the selected completion signal to the receiver.
    *
-   * The `value` branch preserves the `result < 0` guard mandated by
-   * patch 02 §9.2: a kevent may report readiness, then perform_io()
-   * returns a negative errno, but completion_ is still `value` because
-   * the CQE/event handler only updates `result`, not `completion_`.
-   * That errno must surface through set_value(ec, ...) rather than
-   * being lost.
+   * The `value` branch re-derives the error from `result`: a kevent may
+   * report readiness, then perform_io() returns a negative errno, but
+   * completion_ is still `value` because the event handler only updates
+   * `result`, not `completion_`. That errno must surface through
+   * set_value(ec, ...) rather than being lost.
    */
   void execute() noexcept override {
     switch (completion_) {
@@ -99,15 +117,18 @@ class kqueue_receiver_operation : public kqueue_io_operation_base {
   void complete_submit_stopped() noexcept override { complete_with_stopped(); }
 
  protected:
+  /** Creates the operation state bound to the context and receiver. */
   kqueue_receiver_operation(kqueue_context& context, Receiver receiver)
       : context_(&context), receiver_(std::move(receiver)) {}
 
+  /** Returns whether the receiver's associated stop token is canceled. */
   [[nodiscard]] bool stop_requested() const noexcept {
     auto environment = bexec::get_env(receiver_);
     auto token = bexec::query(environment, bexec::get_stop_token);
     return token.stop_requested();
   }
 
+  /** Selects the value channel (empty ec) for a successful start. */
   void complete_with_value() noexcept {
     completion_ = kqueue_receiver_completion::value;
   }
@@ -153,8 +174,11 @@ class kqueue_receiver_operation : public kqueue_io_operation_base {
     context_->publish_io(operation);
   }
 
+  /** Context whose run loop drives this operation. */
   kqueue_context* context_;
+  /** Receiver that receives the completion signal. */
   std::remove_cvref_t<Receiver> receiver_;
+  /** Completion channel selected before execution; consumed by execute(). */
   kqueue_receiver_completion completion_ = kqueue_receiver_completion::value;
   /** Leading ec for the value_with_ec channel; empty for value. */
   std::error_code error_;

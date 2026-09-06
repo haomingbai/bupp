@@ -79,7 +79,9 @@ concept has_immediate_io = requires(Model& model) {
                                           std::size_t size,
                                           std::uint64_t offset) noexcept {
 #ifdef SYS_preadv2
-  struct iovec view{data, size};
+  struct iovec view {
+    data, size
+  };
   const auto low = static_cast<unsigned long>(offset);
   unsigned long high = 0;
   if constexpr (sizeof(unsigned long) < sizeof(std::uint64_t)) {
@@ -100,7 +102,9 @@ concept has_immediate_io = requires(Model& model) {
                                            std::size_t size,
                                            std::uint64_t offset) noexcept {
 #ifdef SYS_pwritev2
-  struct iovec view{const_cast<void*>(data), size};
+  struct iovec view {
+    const_cast<void*>(data), size
+  };
   const auto low = static_cast<unsigned long>(offset);
   unsigned long high = 0;
   if constexpr (sizeof(unsigned long) < sizeof(std::uint64_t)) {
